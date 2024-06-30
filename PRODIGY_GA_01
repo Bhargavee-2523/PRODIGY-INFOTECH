@@ -1,0 +1,70 @@
+pip install transformers datasets torch
+from datasets import load_dataset
+from transformers import GPT2Tokenizer
+
+# Load the dataset
+dataset = load_dataset('text', data_files={'train': 'custom_dataset.txt'})
+
+# Load the tokenizer
+tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+
+# Tokenize the dataset
+def tokenize_function(examples):
+    return tokenizer(examples['text'], truncation=True, padding='max_length', max_length=512)
+
+tokenized_datasets = dataset.map(tokenize_function, batched=True, remove_columns=["text"])
+from transformers import DataCollatorForLanguageModeling
+
+# Data collator for language modeling
+data_collator = DataCollatorForLanguageModeling(
+    tokenizer=tokenizer,
+    mlm=False,
+)
+
+# Convert tokenized datasets to torch Dataset
+tokenized_datasets.set_format(type='torch', columns=['input_ids', 'attention_mask'])
+train_dataset = tokenized_datasets['train']
+from transformers import GPT2LMHeadModel, Trainer, TrainingArguments
+
+# Load the model
+model = GPT2LMHeadModel.from_pretrained('gpt2')
+
+# Training arguments
+training_args = TrainingArguments(
+    output_dir='./results',
+    overwrite_output_dir=True,
+    num_train_epochs=3,
+    per_device_train_batch_size=4,
+    save_steps=10_000,
+    save_total_limit=2,
+    prediction_loss_only=True,
+)
+
+# Initialize the Trainer
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    data_collator=data_collator,
+    train_dataset=train_dataset,
+)
+
+# Train the model
+trainer.train()
+model.save_pretrained('./fine-tuned-gpt2')
+tokenizer.save_pretrained('./fine-tuned-gpt2')
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
+
+# Load the fine-tuned model and tokenizer
+model = GPT2LMHeadModel.from_pretrained('./fine-tuned-gpt2')
+tokenizer = GPT2Tokenizer.from_pretrained('./fine-tuned-gpt2')
+
+# Function to generate text
+def generate_text(prompt, max_length=100):
+    inputs = tokenizer(prompt, return_tensors='pt')
+    outputs = model.generate(inputs['input_ids'], max_length=max_length, num_return_sequences=1)
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+# Generate text based on a prompt
+prompt = "Once upon a time"
+generated_text = generate_text(prompt)
+print(generated_text)
