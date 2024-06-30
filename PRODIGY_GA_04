@@ -1,0 +1,195 @@
+import tensorflow as tf
+from tensorflow.keras import layers
+import tensorflow_datasets as tfds
+import matplotlib.pyplot as plt
+
+# Load the Facades dataset
+dataset, info = tfds.load('cycle_gan/horse2zebra', with_info=True, as_supervised=True)
+
+train_dataset, test_dataset = dataset['trainA'], dataset['testA']
+
+# Image preprocessing function
+def preprocess_image(image, label):
+    image = tf.image.resize(image, [256, 256])
+    image = (image / 127.5) - 1
+    return image
+
+train_dataset = train_dataset.map(preprocess_image, num_parallel_calls=tf.data.AUTOTUNE)
+train_dataset = train_dataset.batch(1)
+
+# Define the generator model (U-Net)
+def generator_model():
+    inputs = layers.Input(shape=[256, 256, 3])
+    down_stack = [
+        layers.Conv2D(64, 4, strides=2, padding='same', use_bias=False),
+        layers.BatchNormalization(),
+        layers.LeakyReLU(),
+
+        layers.Conv2D(128, 4, strides=2, padding='same', use_bias=False),
+        layers.BatchNormalization(),
+        layers.LeakyReLU(),
+
+        layers.Conv2D(256, 4, strides=2, padding='same', use_bias=False),
+        layers.BatchNormalization(),
+        layers.LeakyReLU(),
+
+        layers.Conv2D(512, 4, strides=2, padding='same', use_bias=False),
+        layers.BatchNormalization(),
+        layers.LeakyReLU(),
+
+        layers.Conv2D(512, 4, strides=2, padding='same', use_bias=False),
+        layers.BatchNormalization(),
+        layers.LeakyReLU(),
+
+        layers.Conv2D(512, 4, strides=2, padding='same', use_bias=False),
+        layers.BatchNormalization(),
+        layers.LeakyReLU(),
+
+        layers.Conv2D(512, 4, strides=2, padding='same', use_bias=False),
+        layers.BatchNormalization(),
+        layers.LeakyReLU(),
+
+        layers.Conv2D(512, 4, strides=2, padding='same', use_bias=False),
+    ]
+
+    up_stack = [
+        layers.Conv2DTranspose(512, 4, strides=2, padding='same', use_bias=False),
+        layers.BatchNormalization(),
+        layers.ReLU(),
+
+        layers.Conv2DTranspose(512, 4, strides=2, padding='same', use_bias=False),
+        layers.BatchNormalization(),
+        layers.ReLU(),
+
+        layers.Conv2DTranspose(512, 4, strides=2, padding='same', use_bias=False),
+        layers.BatchNormalization(),
+        layers.ReLU(),
+
+        layers.Conv2DTranspose(512, 4, strides=2, padding='same', use_bias=False),
+        layers.BatchNormalization(),
+        layers.ReLU(),
+
+        layers.Conv2DTranspose(256, 4, strides=2, padding='same', use_bias=False),
+        layers.BatchNormalization(),
+        layers.ReLU(),
+
+        layers.Conv2DTranspose(128, 4, strides=2, padding='same', use_bias=False),
+        layers.BatchNormalization(),
+        layers.ReLU(),
+
+        layers.Conv2DTranspose(64, 4, strides=2, padding='same', use_bias=False),
+        layers.BatchNormalization(),
+        layers.ReLU(),
+
+        layers.Conv2DTranspose(3, 4, strides=2, padding='same', activation='tanh')
+    ]
+
+    x = inputs
+
+    # Downsampling
+    skips = []
+    for down in down_stack:
+        x = down(x)
+        skips.append(x)
+
+    skips = reversed(skips[:-1])
+
+    # Upsampling
+    for up, skip in zip(up_stack, skips):
+        x = up(x)
+        x = layers.Concatenate()([x, skip])
+
+    return tf.keras.Model(inputs=inputs, outputs=x)
+
+# Define the discriminator model (PatchGAN)
+def discriminator_model():
+    initializer = tf.random_normal_initializer(0., 0.02)
+
+    inp = layers.Input(shape=[256, 256, 3], name='input_image')
+    tar = layers.Input(shape=[256, 256, 3], name='target_image')
+
+    x = layers.concatenate([inp, tar])  # (bs, 256, 256, channels*2)
+
+    down1 = layers.Conv2D(64, 4, strides=2, padding='same',
+                          kernel_initializer=initializer, use_bias=False)(x)
+    down1 = layers.LeakyReLU()(down1)
+
+    down2 = layers.Conv2D(128, 4, strides=2, padding='same',
+                          kernel_initializer=initializer, use_bias=False)(down1)
+    down2 = layers.BatchNormalization()(down2)
+    down2 = layers.LeakyReLU()(down2)
+
+    down3 = layers.Conv2D(256, 4, strides=2, padding='same',
+                          kernel_initializer=initializer, use_bias=False)(down2)
+    down3 = layers.BatchNormalization()(down3)
+    down3 = layers.LeakyReLU()(down3)
+
+    zero_pad1 = layers.ZeroPadding2D()(down3)  # (bs, 34, 34, 256)
+    conv = layers.Conv2D(512, 4, strides=1,
+                         kernel_initializer=initializer, use_bias=False)(zero_pad1)  # (bs, 31, 31, 512)
+    batchnorm1 = layers.BatchNormalization()(conv)
+    leaky_relu = layers.LeakyReLU()(batchnorm1)
+    zero_pad2 = layers.ZeroPadding2D()(leaky_relu)  # (bs, 33, 33, 512)
+
+    last = layers.Conv2D(1, 4, strides=1, kernel_initializer=initializer)(zero_pad2)  # (bs, 30, 30, 1)
+
+    return tf.keras.Model(inputs=[inp, tar], outputs=last)
+
+# Define the loss functions
+loss_object = tf.keras.losses.BinaryCrossentropy(from_logits=True)
+
+def discriminator_loss(disc_real_output, disc_generated_output):
+    real_loss = loss_object(tf.ones_like(disc_real_output), disc_real_output)
+    generated_loss = loss_object(tf.zeros_like(disc_generated_output), disc_generated_output)
+    total_disc_loss = real_loss + generated_loss
+    return total_disc_loss
+
+def generator_loss(disc_generated_output, gen_output, target):
+    gan_loss = loss_object(tf.ones_like(disc_generated_output), disc_generated_output)
+    l1_loss = tf.reduce_mean(tf.abs(target - gen_output))
+    total_gen_loss = gan_loss + (100 * l1_loss)
+    return total_gen_loss
+
+# Define the optimizers
+generator_optimizer = tf.keras.optimizers.Adam(2e-4, beta_1=0.5)
+discriminator_optimizer = tf.keras.optimizers.Adam(2e-4, beta_1=0.5)
+
+# Training step
+@tf.function
+def train_step(input_image, target, epoch):
+    with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
+        gen_output = generator(input_image, training=True)
+        disc_real_output = discriminator([input_image, target], training=True)
+        disc_generated_output = discriminator([input_image, gen_output], training=True)
+
+        gen_loss = generator_loss(disc_generated_output, gen_output, target)
+        disc_loss = discriminator_loss(disc_real_output, disc_generated_output)
+
+    generator_gradients = gen_tape.gradient(gen_loss, generator.trainable_variables)
+    discriminator_gradients = disc_tape.gradient(disc_loss, discriminator.trainable_variables)
+
+    generator_optimizer.apply_gradients(zip(generator_gradients, generator.trainable_variables))
+    discriminator_optimizer.apply_gradients(zip(discriminator_gradients, discriminator.trainable_variables))
+
+    return gen_loss, disc_loss
+
+# Training loop
+import time
+
+def fit(train_ds, epochs):
+    for epoch in range(epochs):
+        start = time.time()
+        
+        for input_image, target in train_ds:
+            gen_loss, disc_loss = train_step(input_image, target, epoch)
+        
+        print(f'Epoch {epoch+1}, Gen Loss: {gen_loss.numpy()}, Disc Loss: {disc_loss.numpy()}')
+        print(f'Time taken for epoch {epoch+1} is {time.time()-start} sec\n')
+
+# Instantiate the models
+generator = generator_model()
+discriminator = discriminator_model()
+
+# Train the models
+EPOCHS = 50
+fit(train_dataset, EPOCHS)
