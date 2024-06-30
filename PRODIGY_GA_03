@@ -1,0 +1,39 @@
+import random
+
+class MarkovChain:
+    def __init__(self):
+        self.model = {}
+
+    def train(self, text, n=1):
+        words = text.split()
+        for i in range(len(words) - n):
+            key = tuple(words[i:i+n])
+            next_word = words[i+n]
+            if key not in self.model:
+                self.model[key] = []
+            self.model[key].append(next_word)
+
+    def generate(self, seed, length=50):
+        result = list(seed)
+        current_tuple = tuple(seed)
+        for _ in range(length):
+            if current_tuple in self.model:
+                next_word = random.choice(self.model[current_tuple])
+                result.append(next_word)
+                current_tuple = tuple(result[-len(current_tuple):])
+            else:
+                break
+        return ' '.join(result)
+
+# Load the sample text
+with open('sample_text.txt', 'r') as file:
+    text = file.read()
+
+# Create and train the Markov chain model
+markov_chain = MarkovChain()
+markov_chain.train(text, n=2)  # Using bi-grams (n=2)
+
+# Generate text using the trained model
+seed = ["Once", "upon"]
+generated_text = markov_chain.generate(seed, length=50)
+print(generated_text)
