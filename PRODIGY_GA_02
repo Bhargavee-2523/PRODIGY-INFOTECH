@@ -1,0 +1,34 @@
+from transformers import CLIPTextModel, CLIPTokenizer
+from diffusers import StableDiffusionPipeline
+import torch
+
+# Load the tokenizer and text encoder
+tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
+
+# Load the Stable Diffusion pipeline
+pipe = StableDiffusionPipeline.from_pretrained(
+    "CompVis/stable-diffusion-v1-4",
+    torch_dtype=torch.float16,
+    revision="fp16"
+).to("cuda")
+
+def generate_image(prompt):
+    # Tokenize the prompt
+    inputs = tokenizer(prompt, return_tensors="pt")
+    
+    # Generate the image
+    with torch.no_grad():
+        image = pipe(prompt)["sample"][0]
+    
+    return image
+
+# Example prompt
+prompt = "A futuristic cityscape with flying cars"
+image = generate_image(prompt)
+
+# Display the image
+image.show()
+
+# Save the generated image
+image.save("generated_image.png")
